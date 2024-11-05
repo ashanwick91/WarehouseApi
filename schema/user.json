@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "email": {
+      "type": "string",
+      "format": "email",
+      "minLength": 5,
+      "maxLength": 255
+    },
+    "password": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 255
+    },
+    "role": {
+      "type": "string",
+      "enum": ["admin", "customer"]
+    }
+  },
+  "required": ["email", "password", "role"],
+  "additionalProperties": false
+}
