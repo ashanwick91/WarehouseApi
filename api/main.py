@@ -1,4 +1,6 @@
+import datetime
 import json
+import logging
 
 import bcrypt
 from flask import Flask, request, jsonify
@@ -100,6 +102,83 @@ def add_product():
     data = request.get_json()
     db.products.insert_one(data)
     return jsonify({"msg": "Product added"}), 201
+
+
+# Admin-only endpoint for financial reporting
+@app.route('/reports', methods=['GET'])
+def get_financial_report():
+    report_type = request.args.get("reportType", "Monthly")
+
+    # Step 1: Calculate the total sales amount across all items
+    total_sales = list(db.order.aggregate([
+        { "$unwind": "$items" },
+        {
+            "$group": {
+                "_id": None,
+                "totalSales": {"$sum": "$items.salesAmount"}
+            }
+        }
+    ]))
+
+    # Extract the total sales value
+    total_sales_amount = total_sales[0]["totalSales"] if total_sales else 1  # Avoid division by zero if no sales data
+
+    # Step 2: Calculate the percentage of sales for each category
+    sales_data_category = list(db.order.aggregate([
+        { "$unwind": "$items" },
+        {
+            "$group": {
+                "_id": "$items.category",
+                "categorySales": {"$sum": "$items.salesAmount"},
+                "totalProfitCategory": {"$sum": "$items.profitAmount"}
+            }
+        },
+        {
+            "$addFields": {
+                "totalSalesCategory": {
+                    "$multiply": [{"$divide": ["$categorySales", total_sales_amount]}, 100]
+                }
+            }
+        },
+        {
+            "$project": {
+                "category": "$_id",
+                "totalSalesCategory": 1,  # This now shows the percentage
+                "totalProfitCategory": 1,
+                "_id": 0
+            }
+        }
+    ]))
+
+    # Retrieve sales data by product, including all products
+    sales_data_product = list(db.order.aggregate([
+        { "$unwind": "$items" },
+        {
+            "$group": {
+                "_id": "$items.productName",
+                "totalSalesProduct": {"$sum": "$items.salesAmount"},
+                "totalProfitProduct": {"$sum": "$items.profitAmount"}
+            }
+        },
+        {
+            "$project": {
+                "product": "$_id",
+                "totalSalesProduct": 1,
+                "totalProfitProduct": 1,
+                "_id": 0
+            }
+        }
+    ]))
+
+    # Structure the financial report
+    financial_report = {
+        "reportType": report_type,
+        "salesDataCategory": sales_data_category,
+        "salesDataProduct": sales_data_product,
+        "reportGeneratedAt": datetime.datetime.now().isoformat()
+    }
+
+    return jsonify(financial_report), 200
 
 
 if __name__ == '__main__':
