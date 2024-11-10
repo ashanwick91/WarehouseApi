@@ -5,6 +5,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from jsonschema import validate, ValidationError
+from bson import ObjectId
 
 from db.db import Connection
 
@@ -15,7 +16,7 @@ jwt = JWTManager(app)
 CORS(app)
 
 db = Connection('warehouse')
-
+products_collection = db.products
 
 # Load JSON schema from external file
 def load_schema(file_name):
@@ -100,6 +101,25 @@ def add_product():
     data = request.get_json()
     db.products.insert_one(data)
     return jsonify({"msg": "Product added"}), 201
+
+# Route to retrieve all products (GET)
+@app.route('/products', methods=['GET'])
+def get_all_movies():
+    try:
+        # Fetch products and return selected fields
+        products = products_collection.find({}, {
+             "_id": 1, "name": 1, "description": 1, "price": 1, "category": 1,
+            "imageUrl": 1, "quantity": 1
+        }).limit(20)
+        product_list = []
+        for product in products:
+            if '_id' in product and isinstance(product['_id'], ObjectId):
+                product['_id'] = str(product['_id'])  # Convert ObjectId to string
+            product_list.append(product)
+
+        return jsonify(product_list), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
