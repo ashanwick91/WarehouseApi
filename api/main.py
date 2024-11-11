@@ -1,12 +1,15 @@
 import datetime
 import json
 import logging
+from itertools import product
 
 import bcrypt
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from jsonschema import validate, ValidationError
+from bson import ObjectId
+from datetime import datetime
 
 from db.db import Connection
 
@@ -17,7 +20,6 @@ jwt = JWTManager(app)
 CORS(app)
 
 db = Connection('warehouse')
-
 
 # Load JSON schema from external file
 def load_schema(file_name):
@@ -108,10 +110,52 @@ def add_product():
 @app.route('/reports', methods=['GET'])
 def get_financial_report():
     report_type = request.args.get("reportType", "Monthly")
+    filter_month = request.args.get("filterMonth")
+    filter_date = request.args.get("filterDate")
+
+    # Prepare date filter condition
+    date_filter = {}
+
+    if filter_date:
+        # If a specific date is provided, use it to filter
+        try:
+            specific_date = datetime.strptime(filter_date, "%Y-%m-%d")
+            start_date = datetime(specific_date.year, specific_date.month, specific_date.day, 0, 0, 0)
+            end_date = datetime(specific_date.year, specific_date.month, specific_date.day, 23, 59, 59)
+            date_filter["orderDate"] = {"$gte": start_date, "$lte": end_date}
+        except ValueError:
+            return jsonify({"msg": "Invalid date format, expected YYYY-MM-DD"}), 400
+
+    elif filter_month:
+        # If a month is provided, use it to filter
+        try:
+            year, month = map(int, filter_month.split("-"))
+            start_date = datetime(year, month, 1)
+            if month == 12:
+                end_date = datetime(year + 1, 1, 1)
+            else:
+                end_date = datetime(year, month + 1, 1)
+            date_filter["orderDate"] = {"$gte": start_date, "$lt": end_date}
+        except ValueError:
+            return jsonify({"msg": "Invalid month format, expected YYYY-MM"}), 400
+
+    else:
+        # Default to current month
+        now = datetime.now()
+        start_date = datetime(now.year, now.month, 1)
+        if now.month == 12:
+            end_date = datetime(now.year + 1, 1, 1)
+        else:
+            end_date = datetime(now.year, now.month + 1, 1)
+        date_filter["orderDate"] = {"$gte": start_date, "$lt": end_date}
+
+    # Debugging log to confirm the date filter
+    print(f"Date Filter Applied: {date_filter}")
 
     # Step 1: Calculate the total sales amount across all items
     total_sales = list(db.order.aggregate([
-        { "$unwind": "$items" },
+        {"$match": date_filter},
+        {"$unwind": "$items"},
         {
             "$group": {
                 "_id": None,
@@ -120,12 +164,15 @@ def get_financial_report():
         }
     ]))
 
-    # Extract the total sales value
+    # Debugging log to confirm total sales aggregation result
+    print(f"Total Sales Aggregation Result: {total_sales}")
+
     total_sales_amount = total_sales[0]["totalSales"] if total_sales else 1  # Avoid division by zero if no sales data
 
     # Step 2: Calculate the percentage of sales for each category
     sales_data_category = list(db.order.aggregate([
-        { "$unwind": "$items" },
+        {"$match": date_filter},
+        {"$unwind": "$items"},
         {
             "$group": {
                 "_id": "$items.category",
@@ -143,16 +190,20 @@ def get_financial_report():
         {
             "$project": {
                 "category": "$_id",
-                "totalSalesCategory": 1,  # This now shows the percentage
+                "totalSalesCategory": 1,
                 "totalProfitCategory": 1,
                 "_id": 0
             }
         }
     ]))
 
-    # Retrieve sales data by product, including all products
+    # Debugging log to confirm sales by category
+    print(f"Sales Data by Category: {sales_data_category}")
+
+    # Step 3: Retrieve sales data by product
     sales_data_product = list(db.order.aggregate([
-        { "$unwind": "$items" },
+        {"$match": date_filter},
+        {"$unwind": "$items"},
         {
             "$group": {
                 "_id": "$items.productName",
@@ -170,12 +221,14 @@ def get_financial_report():
         }
     ]))
 
-    # Structure the financial report
+    # Debugging log to confirm sales data by product
+    print(f"Sales Data by Product: {sales_data_product}")
+
     financial_report = {
         "reportType": report_type,
         "salesDataCategory": sales_data_category,
         "salesDataProduct": sales_data_product,
-        "reportGeneratedAt": datetime.datetime.now().isoformat()
+        "reportGeneratedAt": datetime.now().isoformat()
     }
 
     return jsonify(financial_report), 200
