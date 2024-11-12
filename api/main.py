@@ -1,27 +1,26 @@
 import datetime
 import json
-import logging
-from itertools import product
+from datetime import datetime, timedelta
 
 import bcrypt
+from bson import ObjectId
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt
 from jsonschema import validate, ValidationError
-from bson import ObjectId
-
-from datetime import datetime
+from pymongo import ASCENDING, DESCENDING
 
 from db.db import Connection
 
 app = Flask(__name__)
 
 app.config["JWT_SECRET_KEY"] = "warehouse"
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=30)
 jwt = JWTManager(app)
 CORS(app)
 
 db = Connection('warehouse')
-products_collection = db.products
+
 
 # Load JSON schema from external file
 def load_schema(file_name):
@@ -107,15 +106,46 @@ def add_product():
     db.products.insert_one(data)
     return jsonify({"msg": "Product added"}), 201
 
-# Route to retrieve all products (GET)
+
+# Route to retrieve products (GET)
 @app.route('/products', methods=['GET'])
-def get_all_movies():
+def get_products():
+    name = request.args.get('name')
+    description = request.args.get('description')
+    category = request.args.get('category')
+    sort = request.args.get('sort')
+
+    query = {"isDeleted": {"$ne": True}}
+
+    # Prepare the $or condition list if needed
+    or_conditions = []
+
+    if name:
+        or_conditions.append({"name": {"$regex": name, "$options": "i"}})
+    if description:
+        or_conditions.append({"description": {"$regex": description, "$options": "i"}})
+    if category:
+        or_conditions.append({"category": {"$regex": category, "$options": "i"}})
+
+    # If there are conditions in or_conditions, add $or to the query
+    if or_conditions:
+        query["$or"] = or_conditions
+
+    fields_required = {
+        "_id": 1, "name": 1, "description": 1, "price": 1, "category": 1, "imageUrl": 1, "quantity": 1
+    }
+
     try:
-        # Fetch products and return selected fields
-        products = products_collection.find({}, {
-             "_id": 1, "name": 1, "description": 1, "price": 1, "category": 1,
-            "imageUrl": 1, "quantity": 1
-        }).limit(20)
+        if sort:
+            # Parse the sort parameter
+            sort_field, sort_direction = sort.split(":")
+            sort_order = ASCENDING if sort_direction == "asc" else DESCENDING
+
+            # Apply sorting only if sort_param is present
+            products = db.products.find(query, fields_required).sort(sort_field, sort_order)
+        else:
+            products = db.products.find(query, fields_required)
+
         product_list = []
         for product in products:
             if '_id' in product and isinstance(product['_id'], ObjectId):
@@ -125,6 +155,28 @@ def get_all_movies():
         return jsonify(product_list), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# Endpoint to delete a product by its ID
+@app.route('/products/<string:product_id>', methods=['DELETE'])
+@jwt_required()
+def soft_delete_product(product_id):
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can delete products"}), 403
+
+    products = db.products
+    result = products.update_one({"_id": ObjectId(product_id)}, {"$set": {"isDeleted": True}})
+
+    if result.matched_count == 1:
+        return jsonify({"msg": "Product deleted successfully"}), 200
+    else:
+        return jsonify({"msg": "Product not found"}), 404
 
 
 # Admin-only endpoint for financial reporting
