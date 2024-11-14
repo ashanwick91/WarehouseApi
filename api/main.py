@@ -90,7 +90,8 @@ def login():
             return jsonify({"msg": "Your account is pending approval by an admin."}), 403
 
         access_token = create_access_token(identity=user["email"],
-                                           additional_claims={"email": user["email"], "role": user["role"]})
+                                           additional_claims={"email": user["email"], "role": user["role"],
+                                                              "_id": str(user["_id"])})
         return jsonify({"access_token": access_token}), 200
     return jsonify({"msg": "Invalid credentials"}), 401
 
@@ -305,6 +306,50 @@ def get_financial_report():
     }
 
     return jsonify(financial_report), 200
+
+
+@app.route('/order', methods=['POST'])
+def add_order():
+    data = request.get_json()
+
+    # Ensure that the data contains the required fields
+    required_fields = {"customerId", "items", "orderTotal", "status", "orderDate", "createdAt"}
+    if not data or not required_fields.issubset(data):
+        return jsonify({"msg": "Missing order data"}), 400
+
+    # Structure the order items
+    order_items = []
+    for item in data["items"]:
+        required_item_fields = {"productId", "productName", "category", "salesAmount", "quantitySold", "price", "quantity", "transactionDate"}
+        if not required_item_fields.issubset(item):
+            return jsonify({"msg": "Incomplete order item data"}), 400
+
+        order_item = {
+            "productId": item["productId"],
+            "productName": item["productName"],
+            "category": item["category"],
+            "salesAmount": item["salesAmount"],
+            "quantitySold": item["quantitySold"],
+            "price": item["price"],
+            "quantity": item["quantity"],
+            "transactionDate": item["transactionDate"],
+        }
+        order_items.append(order_item)
+
+    # Structure the order data
+    order_data = {
+        "customerId": data["customerId"],
+        "items": order_items,
+        "orderTotal": data["orderTotal"],
+        "status": data["status"],
+        "orderDate": data["orderDate"],
+        "createdAt": data["createdAt"],
+    }
+
+    # Insert the order into the database
+    result = db.order.insert_one(order_data)
+
+    return jsonify({"msg": "Order created successfully", "orderId": str(result.inserted_id)}), 201
 
 
 if __name__ == '__main__':
