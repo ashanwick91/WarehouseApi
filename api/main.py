@@ -6,7 +6,7 @@ import bcrypt
 from bson import ObjectId
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt
 from jsonschema import validate, ValidationError
 from pymongo import ASCENDING, DESCENDING
 
@@ -31,6 +31,7 @@ def load_schema(file_name):
 # Load the schemas
 user_schema = load_schema('user.json')
 login_schema = load_schema('login.json')
+product_schema = load_schema('product.json')
 
 
 # User registration
@@ -96,16 +97,42 @@ def login():
     return jsonify({"msg": "Invalid credentials"}), 401
 
 
-# Admin-only product management (CRUD)
 @app.route('/products', methods=['POST'])
 @jwt_required()
 def add_product():
-    identity = get_jwt_identity()
-    if identity["role"] != "admin":
-        return jsonify({"msg": "Admins only!"}), 403
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can add products"}), 403
+
+    # Parse JSON request
     data = request.get_json()
-    db.products.insert_one(data)
-    return jsonify({"msg": "Product added"}), 201
+
+    # Validate JSON payload against the schema
+    try:
+        validate(instance=data, schema=product_schema)
+    except ValidationError as e:
+        return jsonify({"msg": f"Validation error: {e.message}"}), 400
+
+    # Populate createdAt and updatedAt fields
+    product = {
+        "name": data["name"],
+        "description": data["description"],
+        "price": data["price"],
+        "category": data["category"],
+        "imageUrl": data["imageUrl"],
+        "quantity": data["quantity"],
+        "createdAt": datetime.utcnow(),
+        "updatedAt": datetime.utcnow()
+    }
+
+    # Insert product into the database
+    db.products.insert_one(product)
+    return jsonify({"msg": "Product created successfully"}), 201
 
 
 # Route to retrieve products (GET)
@@ -178,6 +205,53 @@ def soft_delete_product(product_id):
         return jsonify({"msg": "Product deleted successfully"}), 200
     else:
         return jsonify({"msg": "Product not found"}), 404
+
+
+@app.route('/categories', methods=['GET'])
+@jwt_required()
+def get_categories():
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can retrieve product categories"}), 403
+
+    # Fetch only the names of all categories from the database
+    categories = db.categories.find({}, {"_id": 0, "name": 1})
+    category_names = [category["name"] for category in categories]
+
+    return jsonify(category_names), 200
+
+
+@app.route('/categories', methods=['POST'])
+@jwt_required()
+def add_category():
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can add product categories"}), 403
+
+    data = request.get_json()
+    category_name = data.get("name")
+
+    if not category_name:
+        return jsonify({"msg": "Category name is required"}), 400
+
+    # Check if the category already exists
+    existing_category = db.categories.find_one({"name": category_name})
+    if existing_category:
+        return jsonify({"msg": f"Category '{category_name}' already exists"}), 409
+
+    # Add category to the database
+    db.categories.insert_one({"name": category_name})
+    return jsonify({"msg": "Category added successfully"}), 201
 
 
 # Admin-only endpoint for financial reporting
