@@ -135,6 +135,46 @@ def add_product():
     return jsonify({"msg": "Product created successfully"}), 201
 
 
+@app.route('/products/<product_id>', methods=['PUT'])
+@jwt_required()
+def edit_product(product_id):
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can update products"}), 403
+
+    # Parse JSON request
+    data = request.get_json()
+
+    # Validate JSON payload against the schema
+    try:
+        validate(instance=data, schema=product_schema)
+    except ValidationError as e:
+        return jsonify({"msg": f"Validation error: {e.message}"}), 400
+
+    # Check if the product exists
+    if not db.products.find_one({"_id": ObjectId(product_id)}):
+        return jsonify({"msg": "Product not found"}), 404
+
+    # Update the product
+    update_data = {
+        "name": data["name"],
+        "description": data["description"],
+        "price": data["price"],
+        "category": data["category"],
+        "imageUrl": data["imageUrl"],
+        "quantity": data["quantity"],
+        "updatedAt": datetime.utcnow()
+    }
+
+    db.products.update_one({"_id": ObjectId(product_id)}, {"$set": update_data})
+    return jsonify({"msg": "Product updated successfully"}), 200
+
+
 # Route to retrieve products (GET)
 @app.route('/products', methods=['GET'])
 def get_products():
