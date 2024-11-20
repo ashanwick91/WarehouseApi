@@ -1,23 +1,26 @@
 import datetime
 import json
-import logging
+from datetime import datetime, timedelta
 
 import bcrypt
+from bson import ObjectId
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt
 from jsonschema import validate, ValidationError
 
+from pymongo import ASCENDING, DESCENDING
 from db.db import Connection
-
+from bson.objectid import ObjectId
 app = Flask(__name__)
 
 app.config["JWT_SECRET_KEY"] = "warehouse"
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=30)
 jwt = JWTManager(app)
 CORS(app)
 
 db = Connection('warehouse')
-products_collection = db.products
+
 
 # Load JSON schema from external file
 def load_schema(file_name):
@@ -28,6 +31,7 @@ def load_schema(file_name):
 # Load the schemas
 user_schema = load_schema('user.json')
 login_schema = load_schema('login.json')
+product_schema = load_schema('product.json')
 
 
 # User registration
@@ -93,26 +97,123 @@ def login():
     return jsonify({"msg": "Invalid credentials"}), 401
 
 
-# Admin-only product management (CRUD)
 @app.route('/products', methods=['POST'])
 @jwt_required()
 def add_product():
-    identity = get_jwt_identity()
-    if identity["role"] != "admin":
-        return jsonify({"msg": "Admins only!"}), 403
-    data = request.get_json()
-    db.products.insert_one(data)
-    return jsonify({"msg": "Product added"}), 201
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
 
-# Route to retrieve all products (GET)
-@app.route('/products', methods=['GET'])
-def get_all_movies():
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can add products"}), 403
+
+    # Parse JSON request
+    data = request.get_json()
+
+    # Validate JSON payload against the schema
     try:
-        # Fetch products and return selected fields
-        products = products_collection.find({}, {
-             "_id": 1, "name": 1, "description": 1, "price": 1, "category": 1,
-            "imageUrl": 1, "quantity": 1
-        }).limit(20)
+        validate(instance=data, schema=product_schema)
+    except ValidationError as e:
+        return jsonify({"msg": f"Validation error: {e.message}"}), 400
+
+    # Populate createdAt and updatedAt fields
+    product = {
+        "name": data["name"],
+        "description": data["description"],
+        "price": data["price"],
+        "category": data["category"],
+        "imageUrl": data["imageUrl"],
+        "quantity": data["quantity"],
+        "createdAt": datetime.utcnow(),
+        "updatedAt": datetime.utcnow()
+    }
+
+    # Insert product into the database
+    db.products.insert_one(product)
+    return jsonify({"msg": "Product created successfully"}), 201
+
+
+@app.route('/products/<product_id>', methods=['PUT'])
+@jwt_required()
+def edit_product(product_id):
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can update products"}), 403
+
+    # Parse JSON request
+    data = request.get_json()
+
+    # Validate JSON payload against the schema
+    try:
+        validate(instance=data, schema=product_schema)
+    except ValidationError as e:
+        return jsonify({"msg": f"Validation error: {e.message}"}), 400
+
+    # Check if the product exists
+    if not db.products.find_one({"_id": ObjectId(product_id)}):
+        return jsonify({"msg": "Product not found"}), 404
+
+    # Update the product
+    update_data = {
+        "name": data["name"],
+        "description": data["description"],
+        "price": data["price"],
+        "category": data["category"],
+        "imageUrl": data["imageUrl"],
+        "quantity": data["quantity"],
+        "updatedAt": datetime.utcnow()
+    }
+
+    db.products.update_one({"_id": ObjectId(product_id)}, {"$set": update_data})
+    return jsonify({"msg": "Product updated successfully"}), 200
+
+
+# Route to retrieve products (GET)
+@app.route('/products', methods=['GET'])
+def get_products():
+    name = request.args.get('name')
+    description = request.args.get('description')
+    category = request.args.get('category')
+    sort = request.args.get('sort')
+
+    query = {"isDeleted": {"$ne": True}}
+
+    # Prepare the $or condition list if needed
+    or_conditions = []
+
+    if name:
+        or_conditions.append({"name": {"$regex": name, "$options": "i"}})
+    if description:
+        or_conditions.append({"description": {"$regex": description, "$options": "i"}})
+    if category:
+        or_conditions.append({"category": {"$regex": category, "$options": "i"}})
+
+    # If there are conditions in or_conditions, add $or to the query
+    if or_conditions:
+        query["$or"] = or_conditions
+
+    fields_required = {
+        "_id": 1, "name": 1, "description": 1, "price": 1, "category": 1, "imageUrl": 1, "quantity": 1
+    }
+
+    try:
+        if sort:
+            # Parse the sort parameter
+            sort_field, sort_direction = sort.split(":")
+            sort_order = ASCENDING if sort_direction == "asc" else DESCENDING
+
+            # Apply sorting only if sort_param is present
+            products = db.products.find(query, fields_required).sort(sort_field, sort_order)
+        else:
+            products = db.products.find(query, fields_required)
+
         product_list = []
         for product in products:
             if '_id' in product and isinstance(product['_id'], ObjectId):
@@ -124,14 +225,125 @@ def get_all_movies():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint to delete a product by its ID
+@app.route('/products/<string:product_id>', methods=['DELETE'])
+@jwt_required()
+def soft_delete_product(product_id):
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can delete products"}), 403
+
+    products = db.products
+    result = products.update_one({"_id": ObjectId(product_id)}, {"$set": {"isDeleted": True}})
+
+    if result.matched_count == 1:
+        return jsonify({"msg": "Product deleted successfully"}), 200
+    else:
+        return jsonify({"msg": "Product not found"}), 404
+
+
+@app.route('/categories', methods=['GET'])
+@jwt_required()
+def get_categories():
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can retrieve product categories"}), 403
+
+    # Fetch only the names of all categories from the database
+    categories = db.categories.find({}, {"_id": 0, "name": 1})
+    category_names = [category["name"] for category in categories]
+
+    return jsonify(category_names), 200
+
+
+@app.route('/categories', methods=['POST'])
+@jwt_required()
+def add_category():
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can add product categories"}), 403
+
+    data = request.get_json()
+    category_name = data.get("name")
+
+    if not category_name:
+        return jsonify({"msg": "Category name is required"}), 400
+
+    # Check if the category already exists
+    existing_category = db.categories.find_one({"name": category_name})
+    if existing_category:
+        return jsonify({"msg": f"Category '{category_name}' already exists"}), 409
+
+    # Add category to the database
+    db.categories.insert_one({"name": category_name})
+    return jsonify({"msg": "Category added successfully"}), 201
+
+
 # Admin-only endpoint for financial reporting
 @app.route('/reports', methods=['GET'])
 def get_financial_report():
     report_type = request.args.get("reportType", "Monthly")
+    filter_month = request.args.get("filterMonth")
+    filter_date = request.args.get("filterDate")
+
+    # Prepare date filter condition
+    date_filter = {}
+
+    if filter_date:
+        # If a specific date is provided, use it to filter
+        try:
+            specific_date = datetime.strptime(filter_date, "%Y-%m-%d")
+            start_date = datetime(specific_date.year, specific_date.month, specific_date.day, 0, 0, 0)
+            end_date = datetime(specific_date.year, specific_date.month, specific_date.day, 23, 59, 59)
+            date_filter["orderDate"] = {"$gte": start_date, "$lte": end_date}
+        except ValueError:
+            return jsonify({"msg": "Invalid date format, expected YYYY-MM-DD"}), 400
+
+    elif filter_month:
+        # If a month is provided, use it to filter
+        try:
+            year, month = map(int, filter_month.split("-"))
+            start_date = datetime(year, month, 1)
+            if month == 12:
+                end_date = datetime(year + 1, 1, 1)
+            else:
+                end_date = datetime(year, month + 1, 1)
+            date_filter["orderDate"] = {"$gte": start_date, "$lt": end_date}
+        except ValueError:
+            return jsonify({"msg": "Invalid month format, expected YYYY-MM"}), 400
+
+    else:
+        # Default to current month
+        now = datetime.now()
+        start_date = datetime(now.year, now.month, 1)
+        if now.month == 12:
+            end_date = datetime(now.year + 1, 1, 1)
+        else:
+            end_date = datetime(now.year, now.month + 1, 1)
+        date_filter["orderDate"] = {"$gte": start_date, "$lt": end_date}
+
+    # Debugging log to confirm the date filter
+    print(f"Date Filter Applied: {date_filter}")
 
     # Step 1: Calculate the total sales amount across all items
     total_sales = list(db.order.aggregate([
-        { "$unwind": "$items" },
+        {"$match": date_filter},
+        {"$unwind": "$items"},
         {
             "$group": {
                 "_id": None,
@@ -140,12 +352,15 @@ def get_financial_report():
         }
     ]))
 
-    # Extract the total sales value
+    # Debugging log to confirm total sales aggregation result
+    print(f"Total Sales Aggregation Result: {total_sales}")
+
     total_sales_amount = total_sales[0]["totalSales"] if total_sales else 1  # Avoid division by zero if no sales data
 
     # Step 2: Calculate the percentage of sales for each category
     sales_data_category = list(db.order.aggregate([
-        { "$unwind": "$items" },
+        {"$match": date_filter},
+        {"$unwind": "$items"},
         {
             "$group": {
                 "_id": "$items.category",
@@ -163,16 +378,20 @@ def get_financial_report():
         {
             "$project": {
                 "category": "$_id",
-                "totalSalesCategory": 1,  # This now shows the percentage
+                "totalSalesCategory": 1,
                 "totalProfitCategory": 1,
                 "_id": 0
             }
         }
     ]))
 
-    # Retrieve sales data by product, including all products
+    # Debugging log to confirm sales by category
+    print(f"Sales Data by Category: {sales_data_category}")
+
+    # Step 3: Retrieve sales data by product
     sales_data_product = list(db.order.aggregate([
-        { "$unwind": "$items" },
+        {"$match": date_filter},
+        {"$unwind": "$items"},
         {
             "$group": {
                 "_id": "$items.productName",
@@ -190,12 +409,14 @@ def get_financial_report():
         }
     ]))
 
-    # Structure the financial report
+    # Debugging log to confirm sales data by product
+    print(f"Sales Data by Product: {sales_data_product}")
+
     financial_report = {
         "reportType": report_type,
         "salesDataCategory": sales_data_category,
         "salesDataProduct": sales_data_product,
-        "reportGeneratedAt": datetime.datetime.now().isoformat()
+        "reportGeneratedAt": datetime.now().isoformat()
     }
 
     return jsonify(financial_report), 200
@@ -245,7 +466,7 @@ def add_order():
     return jsonify({"msg": "Order created successfully", "orderId": str(result.inserted_id)}), 201
 
 
-from bson.objectid import ObjectId
+
 
 def convert_objectid_to_str(data):
     """Recursively convert ObjectId instances to strings."""
