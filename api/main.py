@@ -8,10 +8,10 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt
 from jsonschema import validate, ValidationError
+
 from pymongo import ASCENDING, DESCENDING
-
 from db.db import Connection
-
+from bson.objectid import ObjectId
 app = Flask(__name__)
 
 app.config["JWT_SECRET_KEY"] = "warehouse"
@@ -465,6 +465,69 @@ def add_order():
 
     return jsonify({"msg": "Order created successfully", "orderId": str(result.inserted_id)}), 201
 
+
+
+
+def convert_objectid_to_str(data):
+    """Recursively convert ObjectId instances to strings."""
+    if isinstance(data, dict):
+        return {key: convert_objectid_to_str(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [convert_objectid_to_str(item) for item in data]
+    elif isinstance(data, ObjectId):
+        return str(data)
+    return data
+
+@app.route('/order/<string:orderId>', methods=['GET'])
+def get_order_details(orderId):
+    try:
+        # Validate the orderId format
+        if not ObjectId.is_valid(orderId):
+            return jsonify({"msg": "Invalid order ID format"}), 400
+
+        # Query to find the specific order by orderId
+        order = db.order.find_one({"_id": ObjectId(orderId)})
+
+        if not order:
+            return jsonify({"msg": "Order not found"}), 404
+
+        # Recursively convert all ObjectId instances to strings
+        order = convert_objectid_to_str(order)
+
+        # Return the order details
+        return jsonify(order), 200
+
+    except Exception as e:
+        logging.error(f"Error retrieving order {orderId}: {e}", exc_info=True)
+        return jsonify({"error": f"An error occurred while retrieving the order: {e}"}), 500
+
+
+@app.route('/orders/<string:customerId>', methods=['GET'])
+def get_orders_by_customer(customerId):
+    try:
+        # Query to find orders for the given customerId
+        query_filter = {"customerId": customerId}
+
+        # Fetch all orders for the customer
+        orders_cursor = db.order.find(query_filter)
+        orders_list = []
+        for order in orders_cursor:
+            order["_id"] = str(order["_id"])  # Convert ObjectId to string
+            for item in order["items"]:
+                if "_id" in item and isinstance(item["_id"], ObjectId):
+                    item["_id"] = str(item["_id"])
+            orders_list.append(order)
+
+        # Create response with the list of orders
+        response = {
+            "orders": orders_list
+        }
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        logging.error(f"Error retrieving orders for customer {customerId}: {e}")
+        return jsonify({"error": "An error occurred while retrieving orders."}), 500
 
 if __name__ == '__main__':
     # Run the application on all available IPs on port 8888
