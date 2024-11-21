@@ -535,6 +535,55 @@ def get_orders_by_customer(customer_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Endpoint to fetch user profile data by user ID
+@app.route('/users/<string:user_id>', methods=['GET'])
+@jwt_required()
+def get_user_profile(user_id):
+    claims = get_jwt()
+    current_user_id = claims.get("_id")
+    role = claims.get("role")
+
+    if current_user_id != user_id and role != "admin":
+        return jsonify({"msg": "Access denied: You can only access your profile"}), 403
+
+    user = db.users.find_one({"_id": ObjectId(user_id)}, {"password": 0})  # Exclude password for security
+    if not user:
+        return jsonify({"msg": "User not found"}), 404
+
+    user["_id"] = str(user["_id"])
+    return jsonify(user), 200
+
+
+# Endpoint to update user profile
+@app.route('/users/<string:user_id>', methods=['PUT'])
+@jwt_required()
+def update_user_profile(user_id):
+    claims = get_jwt()  # Retrieve the JWT claims
+
+    # Verify that the user is accessing their own profile or is an admin
+    current_user_id = claims.get("_id")
+    role = claims.get("role")
+    if current_user_id != user_id and role != "admin":
+        return jsonify({"msg": "Access denied: You can only update your profile"}), 403
+
+    # Parse the incoming JSON request
+    data = request.get_json()
+
+    # Ensure 'password' is not required for updates
+    if "password" in data and data["password"]:
+        # Hash the password if it's being updated
+        data["password"] = bcrypt.hashpw(data["password"].encode('utf-8'), bcrypt.gensalt())
+    elif "password" in data:
+        # Remove empty password from data to avoid validation errors
+        del data["password"]
+
+    # Use $set to update only provided fields
+    result = db.users.update_one({"_id": ObjectId(user_id)}, {"$set": data})
+    if result.matched_count == 0:
+        return jsonify({"msg": "User not found"}), 404
+
+    return jsonify({"msg": "User profile updated successfully"}), 200
+
 if __name__ == '__main__':
     # Run the application on all available IPs on port 8888
     app.run(host='0.0.0.0', port=8888)
