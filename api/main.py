@@ -182,6 +182,10 @@ def get_products():
     description = request.args.get('description')
     category = request.args.get('category')
     sort = request.args.get('sort')
+    filter_categories = request.args.getlist('filterCategories')
+    
+    min_price = request.args.get('minPrice', type=float)  
+    max_price = request.args.get('maxPrice', type=float)  
 
     query = {"isDeleted": {"$ne": True}}
 
@@ -198,6 +202,18 @@ def get_products():
     # If there are conditions in or_conditions, add $or to the query
     if or_conditions:
         query["$or"] = or_conditions
+    if category:
+        query["category"] = {"$regex": category, "$options": "i"}    
+    
+     
+    # Add price range filter (new)
+    if min_price is not None or max_price is not None:
+        price_filter = {}
+        if min_price is not None:
+            price_filter["$gte"] = min_price
+        if max_price is not None:
+            price_filter["$lte"] = max_price
+        query["price"] = price_filter  
 
     fields_required = {
         "_id": 1, "name": 1, "description": 1, "price": 1, "category": 1, "imageUrl": 1, "quantity": 1
