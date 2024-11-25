@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta
 
 import bcrypt
-from bson import ObjectId
+from bson.objectid import ObjectId
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt
@@ -11,7 +11,7 @@ from jsonschema import validate, ValidationError
 from pymongo import ASCENDING, DESCENDING
 
 from db.db import Connection
-from bson.objectid import ObjectId
+
 app = Flask(__name__)
 
 app.config["JWT_SECRET_KEY"] = "warehouse"
@@ -63,7 +63,9 @@ def register():
         "password": hashed_password,
         "role": data["role"],
         "isProfileComplete": False,
-        "isApproved": is_approved  # False for admin, True for customers
+        "isApproved": is_approved,  # False for admin, True for customers
+        "createdAt": datetime.utcnow(),
+        "updatedAt": datetime.utcnow()
     }
 
     users.insert_one(user_data)
@@ -182,10 +184,9 @@ def get_products():
     description = request.args.get('description')
     category = request.args.get('category')
     sort = request.args.get('sort')
-    filter_categories = request.args.getlist('filterCategories')
-    
-    min_price = request.args.get('minPrice', type=float)  
-    max_price = request.args.get('maxPrice', type=float)  
+
+    min_price = request.args.get('minPrice', type=float)
+    max_price = request.args.get('maxPrice', type=float)
 
     query = {"isDeleted": {"$ne": True}}
 
@@ -203,17 +204,16 @@ def get_products():
     if or_conditions:
         query["$or"] = or_conditions
     if category:
-        query["category"] = {"$regex": category, "$options": "i"}    
-    
-     
-    # Add price range filter (new)
+        query["category"] = {"$regex": category, "$options": "i"}
+
+        # Add price range filter (new)
     if min_price is not None or max_price is not None:
         price_filter = {}
         if min_price is not None:
             price_filter["$gte"] = min_price
         if max_price is not None:
             price_filter["$lte"] = max_price
-        query["price"] = price_filter  
+        query["price"] = price_filter
 
     fields_required = {
         "_id": 1, "name": 1, "description": 1, "price": 1, "category": 1, "imageUrl": 1, "quantity": 1
@@ -450,7 +450,8 @@ def add_order():
     # Structure the order items
     order_items = []
     for item in data["items"]:
-        required_item_fields = {"productId", "productName", "category", "salesAmount", "quantitySold", "price", "quantity", "transactionDate"}
+        required_item_fields = {"productId", "productName", "category", "salesAmount", "quantitySold", "price",
+                                "quantity", "transactionDate"}
         if not required_item_fields.issubset(item):
             return jsonify({"msg": "Incomplete order item data"}), 400
 
@@ -462,7 +463,7 @@ def add_order():
             "quantitySold": item["quantitySold"],
             "price": item["price"],
             "quantity": item["quantity"],
-            "transactionDate":datetime.utcnow(),
+            "transactionDate": datetime.utcnow(),
         }
         order_items.append(order_item)
 
@@ -473,7 +474,7 @@ def add_order():
         "orderTotal": data["orderTotal"],
         "status": data["status"],
         "orderDate": datetime.utcnow(),
-        "createdAt":datetime.utcnow(),
+        "createdAt": datetime.utcnow(),
     }
 
     # Insert the order into the database
@@ -514,6 +515,7 @@ def get_order_details(orderId):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route('/orders/<string:customer_id>', methods=['GET'])
 def get_orders_by_customer(customer_id):
     try:
@@ -551,15 +553,49 @@ def get_orders_by_customer(customer_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route('/users', methods=['GET'])
+@jwt_required()
+def get_users():
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can retrieve users"}), 403
+
+    role = request.args.get('role')
+    query = {"role": role}
+
+    fields_required = {
+        "_id": 1, "email": 1, "isApproved": 1, "createdAt": 1
+    }
+
+    try:
+        users = db.users.find(query, fields_required)
+
+        users_list = []
+        for user in users:
+            if '_id' in user and isinstance(user['_id'], ObjectId):
+                user['id'] = str(user['_id'])  # Convert ObjectId to string
+                del user['_id']
+            users_list.append(user)
+
+        return jsonify(users_list), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # Endpoint to fetch user profile data by user ID
 @app.route('/users/<string:user_id>', methods=['GET'])
 @jwt_required()
 def get_user_profile(user_id):
     claims = get_jwt()
     current_user_id = claims.get("_id")
-    role = claims.get("role")
 
-    if current_user_id != user_id and role != "admin":
+    if current_user_id != user_id:
         return jsonify({"msg": "Access denied: You can only access your profile"}), 403
 
     user = db.users.find_one({"_id": ObjectId(user_id)}, {"password": 0})  # Exclude password for security
@@ -578,12 +614,12 @@ def update_user_profile(user_id):
 
     # Verify that the user is accessing their own profile or is an admin
     current_user_id = claims.get("_id")
-    role = claims.get("role")
-    if current_user_id != user_id and role != "admin":
+    if current_user_id != user_id:
         return jsonify({"msg": "Access denied: You can only update your profile"}), 403
 
     # Parse the incoming JSON request
     data = request.get_json()
+    data["updatedAt"] = datetime.utcnow()
 
     # Ensure 'password' is not required for updates
     if "password" in data and data["password"]:
@@ -599,6 +635,32 @@ def update_user_profile(user_id):
         return jsonify({"msg": "User not found"}), 404
 
     return jsonify({"msg": "User profile updated successfully"}), 200
+
+
+@app.route('/users/<user_id>/approve', methods=['PUT'])
+@jwt_required()
+def approve_user(user_id):
+    claims = get_jwt()  # Gets the entire JWT, including additional claims
+
+    # Access custom claims
+    role = claims.get("role")
+
+    # Check if the current user is an admin
+    if role != "admin":
+        return jsonify({"msg": "Access denied: Only admins can approve users"}), 403
+
+    # Check if the user exists
+    if not db.users.find_one({"_id": ObjectId(user_id)}):
+        return jsonify({"msg": "User not found"}), 404
+
+    # Update the user
+    update_data = {
+        "isApproved": True
+    }
+
+    db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
+    return jsonify({"msg": "User approved successfully"}), 200
+
 
 if __name__ == '__main__':
     # Run the application on all available IPs on port 8888
