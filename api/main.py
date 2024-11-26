@@ -570,7 +570,7 @@ def get_users():
     query = {"role": role}
 
     fields_required = {
-        "_id": 1, "email": 1, "isApproved": 1, "createdAt": 1
+        "_id": 1, "email": 1, "isApproved": 1, "createdAt": 1,"profile": 1
     }
 
     try:
