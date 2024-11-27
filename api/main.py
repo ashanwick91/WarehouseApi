@@ -661,6 +661,39 @@ def approve_user(user_id):
     db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
     return jsonify({"msg": "User approved successfully"}), 200
 
+# Add activity log
+@app.route('/activity-log', methods=['POST'])
+@jwt_required()
+def log_activity():
+    data = request.get_json()
+    user_id = get_jwt().get("_id")
+
+    log = {
+        "userId": user_id,
+        "action": data.get("action"),
+        "details": data.get("details"),
+        "timestamp": datetime.utcnow(),
+        "metadata": data.get("metadata", {})
+    }
+
+    db.activity_logs.insert_one(log)
+    return jsonify({"msg": "Activity logged successfully"}), 201
+
+
+# Retrieve all activity logs for admin
+@app.route('/activity-log', methods=['GET'])
+@jwt_required()
+def get_activity_logs():
+    claims = get_jwt()
+    if claims.get("role") != "admin":
+        return jsonify({"msg": "Access denied: Only admins can access activity logs"}), 403
+
+    logs = list(db.activity_logs.find())
+    for log in logs:
+        log["_id"] = str(log["_id"])
+
+    return jsonify(logs), 200
+  
 
 if __name__ == '__main__':
     # Run the application on all available IPs on port 8888
