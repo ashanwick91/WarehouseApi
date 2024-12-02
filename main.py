@@ -24,7 +24,7 @@ db = Connection('warehouse')
 
 # Load JSON schema from external file
 def load_schema(file_name):
-    with open(f'../schema/{file_name}', 'r') as schema_file:
+    with open(f'schema/{file_name}', 'r') as schema_file:
         return json.load(schema_file)
 
 
