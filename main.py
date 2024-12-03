@@ -411,6 +411,24 @@ def get_financial_report():
         {"$match": date_filter},
         {"$unwind": "$items"},
         {
+            "$lookup": {
+                "from": "products",
+                "let": {"productId": {"$toObjectId": "$items.productId"}},  # Convert to ObjectId
+                "pipeline": [
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$productId"]}}}
+                ],
+                "as": "productDetails"
+            }
+        },
+        {"$unwind": "$productDetails"},  # Unwind productDetails array
+        {
+            "$addFields": {  # Calculate profit dynamically
+                "items.profitAmount": {
+                    "$subtract": ["$items.price", "$productDetails.originalPrice"]
+                }
+            }
+        },
+        {
             "$group": {
                 "_id": "$items.productName",
                 "totalSalesProduct": {"$sum": "$items.salesAmount"},
