@@ -539,11 +539,12 @@ def get_order_details(orderId):
 @app.route('/orders/<string:customer_id>', methods=['GET'])
 def get_orders_by_customer(customer_id):
     try:
-        # Query to find orders for the given customerId
+        # Query to find orders for the given customerId and sort by orderDate (descending)
         query_filter = {"customerId": customer_id}
+        sort_criteria = [("orderDate", -1)]  # Sort by orderDate in descending order
 
-        # Fetch all orders for the customer
-        orders_cursor = db.order.find(query_filter)
+        # Fetch all orders for the customer, sorted by orderDate
+        orders_cursor = db.order.find(query_filter).sort(sort_criteria)
         orders_list = []
 
         for order in orders_cursor:
