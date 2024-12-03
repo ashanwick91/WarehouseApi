@@ -125,6 +125,7 @@ def add_product():
         "name": data["name"],
         "description": data["description"],
         "price": data["price"],
+        "originalPrice": data["originalPrice"],
         "category": data["category"],
         "imageUrl": data["imageUrl"],
         "quantity": data["quantity"],
@@ -167,6 +168,7 @@ def edit_product(product_id):
         "name": data["name"],
         "description": data["description"],
         "price": data["price"],
+        "originalPrice": data["originalPrice"],
         "category": data["category"],
         "imageUrl": data["imageUrl"],
         "quantity": data["quantity"],
@@ -216,7 +218,7 @@ def get_products():
         query["price"] = price_filter
 
     fields_required = {
-        "_id": 1, "name": 1, "description": 1, "price": 1, "category": 1, "imageUrl": 1, "quantity": 1
+        "_id": 1, "name": 1, "description": 1, "price": 1, "originalPrice": 1, "category": 1, "imageUrl": 1, "quantity": 1
     }
 
     try:
